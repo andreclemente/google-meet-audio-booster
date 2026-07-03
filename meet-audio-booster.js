@@ -276,6 +276,14 @@
       );
 
       buttons.appendChild(
+        makeButton("50%", () => {
+          slider.value = "0.5";
+          applyGain(item, 0.5);
+          value.textContent = "50%";
+        }),
+      );
+
+      buttons.appendChild(
         makeButton("100%", () => {
           slider.value = "1";
           applyGain(item, 1);
