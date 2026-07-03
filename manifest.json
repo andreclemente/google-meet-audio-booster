@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Meet Audio Booster",
+  "version": "1.0.0",
+  "description": "Per-participant volume controls for Google Meet.",
+  "host_permissions": ["https://meet.google.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["meet-audio-booster.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
