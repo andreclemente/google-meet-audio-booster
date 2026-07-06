@@ -3,7 +3,7 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v9'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v10'
 
   const state = {
     gains: [],
@@ -74,6 +74,10 @@
       .replace(/'s microphone$/i, '')
       .replace(/\s+/g, ' ')
       .trim()
+  }
+
+  function isGenericAudioName(name) {
+    return /^Audio \d+$/i.test(name || '')
   }
 
   function isValidParticipantName(name) {
@@ -458,20 +462,20 @@
     makeDraggable(panel, header)
 
     const participantNames = [...state.participants].filter((name) => !isHiddenParticipant(name))
-    // We only render captured Meet audio gain nodes. The full People roster can include
-    // the local user and non-audio rows; if it is longer than the captured audio list,
-    // Meet usually has the local user first, so skip that first roster label for matching.
-    const audioParticipantNames = participantNames.length > state.gains.length
+    // Render only captured Meet audio gain nodes. The roster is only a label source.
+    // If Meet includes the local user in the roster, it is usually the extra first row.
+    const audioParticipantNames = participantNames.length === state.gains.length + 1
       ? participantNames.slice(1)
       : participantNames
 
     const visibleRows = state.gains.map((item, index) => {
-      const participantName = item.name || audioParticipantNames[index] || `Audio ${index + 1}`
+      const candidateName = audioParticipantNames[index]
+      const participantName = candidateName || item.name || `Audio ${index + 1}`
 
-      if (!item.name) {
-        item.name = participantName
+      if (candidateName && (!item.name || isGenericAudioName(item.name))) {
+        item.name = candidateName
 
-        const saved = state.settings.gains?.[participantName]
+        const saved = state.settings.gains?.[candidateName]
         if (typeof saved === 'number') applyGain(item, saved)
       }
 
@@ -601,10 +605,6 @@
         setStatus(`${participantName}: 250%`)
       }, !hasAudioControl))
 
-      buttons.appendChild(makeButton("It's me", () => {
-        hideParticipant(participantName)
-      }))
-
       row.appendChild(top)
       row.appendChild(slider)
       row.appendChild(buttons)
@@ -624,7 +624,6 @@
       flexWrap: 'wrap'
     })
 
-    footer.appendChild(makeButton('Load all participants', loadAllParticipants, state.loadingParticipants, state.loadingParticipants ? 'Loading...' : null))
     footer.appendChild(makeButton('Refresh', () => {
       setStatus('Refreshing...')
       renderPanel()
@@ -640,7 +639,7 @@
 
       saveSettings()
       renderPanel()
-      setStatus('Reset gains and hidden participants')
+      setStatus('Reset gains')
     }))
 
     panel.appendChild(footer)
