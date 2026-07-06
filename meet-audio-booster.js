@@ -3,7 +3,7 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v3'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v4'
 
   const state = {
     gains: [],
@@ -46,62 +46,93 @@
   function isValidParticipantName(name) {
     if (!name) return false
 
+    const lower = name.toLowerCase()
     const ignored = [
-      'People',
-      'Chat',
-      'Meeting details',
-      'Audio settings',
-      'Video settings',
-      'More options',
-      'Host controls',
-      'Meeting tools',
-      'Send a reaction',
-      'Raise hand',
-      'Leave call',
-      'Present now'
+      'people',
+      'chat',
+      'meeting details',
+      'audio settings',
+      'video settings',
+      'more options',
+      'host controls',
+      'meeting tools',
+      'send a reaction',
+      'raise hand',
+      'leave call',
+      'present now',
+      'activities',
+      'captions',
+      'visual effects',
+      'settings',
+      'close',
+      'search for people',
+      'add people',
+      'in call',
+      'contributors',
+      'meeting host',
+      'host',
+      'co-host',
+      'you',
+      'me'
     ]
 
     return (
       name.length >= 2 &&
       name.length <= 80 &&
-      !ignored.includes(name) &&
-      !name.includes('presentation') &&
-      !name.includes('microphone') &&
-      !name.includes('camera') &&
-      !name.includes('screen')
+      !ignored.includes(lower) &&
+      !lower.includes('(you)') &&
+      !lower.includes('presentation') &&
+      !lower.includes('microphone') &&
+      !lower.includes('camera') &&
+      !lower.includes('screen') &&
+      !lower.includes('muted') &&
+      !lower.includes('speaking') &&
+      !lower.includes('participant') &&
+      !lower.includes('meeting') &&
+      !lower.includes('google meet') &&
+      !/^\d+$/.test(name)
     )
   }
 
-  function scrapeParticipantNames() {
-    const names = new Set(state.participants)
+  function addParticipantName(names, rawName) {
+    const name = cleanName(rawName)
+    if (isValidParticipantName(name)) names.add(name)
+  }
 
-    document.querySelectorAll('button[aria-label], div[aria-label], span[aria-label]').forEach((el) => {
-      const label = el.getAttribute('aria-label') || ''
+  function scrapeNamesFromRoot(root, names) {
+    root.querySelectorAll?.('[aria-label], [data-participant-id], [role="listitem"], [role="gridcell"]').forEach((el) => {
+      const label = el.getAttribute?.('aria-label') || ''
 
       const matches = [
-        label.match(/^Mute (.+)'s microphone$/),
-        label.match(/^More options for (.+)$/),
-        label.match(/^Pin (.+) to your main screen$/),
-        label.match(/^Unpin (.+?)'s presentation from your main screen$/)
+        label.match(/^Mute (.+)'s microphone$/i),
+        label.match(/^Unmute (.+)'s microphone$/i),
+        label.match(/^Ask (.+) to unmute$/i),
+        label.match(/^More (?:actions|options) for (.+)$/i),
+        label.match(/^Pin (.+?)(?: to your main screen)?$/i),
+        label.match(/^Unpin (.+?)(?: from your main screen)?$/i),
+        label.match(/^Remove (.+) from (?:the )?call$/i),
+        label.match(/^(.+),\s*(?:muted|not muted|speaking)$/i),
+        label.match(/^(.+)'s (?:microphone|camera)$/i)
       ]
 
-      matches.forEach((match) => {
-        const name = cleanName(match?.[1])
-        if (isValidParticipantName(name)) names.add(name)
-      })
+      matches.forEach((match) => addParticipantName(names, match?.[1]))
+
+      if (el.matches?.('[data-participant-id], [role="listitem"], [role="gridcell"]')) {
+        const lines = (el.textContent || '')
+          .split('\n')
+          .map(cleanName)
+          .filter(Boolean)
+
+        // People-panel rows usually put the participant name in the first useful text line.
+        const firstName = lines.find(isValidParticipantName)
+        addParticipantName(names, firstName)
+      }
     })
+  }
 
-    document.querySelectorAll('[data-participant-id], [role="listitem"], [role="gridcell"]').forEach((el) => {
-      const text = cleanName(el.textContent)
-
-      if (!text) return
-
-      text
-        .split('\n')
-        .map(cleanName)
-        .filter(isValidParticipantName)
-        .forEach((name) => names.add(name))
-    })
+  function scrapeParticipantNames(root = document) {
+    const names = new Set(state.participants)
+    scrapeNamesFromRoot(root, names)
 
     state.participants = names
     saveSettings()
@@ -109,23 +140,61 @@
     return [...names]
   }
 
-  function clickPeopleButton() {
-    const button = [...document.querySelectorAll('button[aria-label]')].find((btn) => {
+  function findPeopleButton() {
+    return [...document.querySelectorAll('button[aria-label], div[role="button"][aria-label]')].find((btn) => {
       const label = btn.getAttribute('aria-label') || ''
       return (
         label === 'People' ||
         label.startsWith('People') ||
         label.includes('Show everyone') ||
-        label.includes('participants')
+        label.toLowerCase().includes('participants')
       )
     })
+  }
 
-    button?.click()
+  function getScrollableContainers() {
+    return [...document.querySelectorAll('div, section, aside')]
+      .filter((el) => {
+        const rect = el.getBoundingClientRect()
+        return (
+          rect.width >= 180 &&
+          rect.height >= 120 &&
+          el.scrollHeight > el.clientHeight + 40 &&
+          getComputedStyle(el).overflowY !== 'hidden'
+        )
+      })
+      .sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight))
+  }
 
-    setTimeout(() => {
-      scrapeParticipantNames()
-      renderPanel()
-    }, 800)
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  async function loadAllParticipants() {
+    const peopleButton = findPeopleButton()
+    peopleButton?.click()
+
+    await wait(700)
+    scrapeParticipantNames()
+
+    const containers = getScrollableContainers()
+
+    for (const container of containers) {
+      const originalTop = container.scrollTop
+      const maxTop = container.scrollHeight - container.clientHeight
+      const step = Math.max(80, Math.floor(container.clientHeight * 0.8))
+
+      for (let top = 0; top <= maxTop + step; top += step) {
+        container.scrollTop = Math.min(top, maxTop)
+        await wait(90)
+        scrapeParticipantNames(container)
+      }
+
+      container.scrollTop = originalTop
+    }
+
+    scrapeParticipantNames()
+    renderPanel()
   }
 
   function applyGain(item, value) {
@@ -454,7 +523,7 @@
       flexWrap: 'wrap'
     })
 
-    footer.appendChild(makeButton('Load participants', clickPeopleButton))
+    footer.appendChild(makeButton('Load all participants', loadAllParticipants))
     footer.appendChild(makeButton('Refresh', renderPanel))
 
     footer.appendChild(makeButton('Reset', () => {
