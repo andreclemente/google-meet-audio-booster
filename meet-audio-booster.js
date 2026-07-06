@@ -628,20 +628,16 @@
       setStatus('Refreshed')
     }))
 
-    footer.appendChild(makeButton('Reset hidden', () => {
-      state.settings.hiddenParticipants = []
-      saveSettings()
-      setStatus('Hidden list reset')
-      renderPanel()
-    }))
-
     footer.appendChild(makeButton('Reset', () => {
+      state.settings.hiddenParticipants = []
+
       visibleRows.forEach(({ item }) => {
         if (item) applyGain(item, 1)
       })
 
+      saveSettings()
       renderPanel()
-      setStatus('Reset all visible controls')
+      setStatus('Reset gains and hidden participants')
     }))
 
     panel.appendChild(footer)
