@@ -3,7 +3,7 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v8'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v9'
 
   const state = {
     gains: [],
@@ -458,14 +458,17 @@
     makeDraggable(panel, header)
 
     const participantNames = [...state.participants].filter((name) => !isHiddenParticipant(name))
+    // We only render captured Meet audio gain nodes. The full People roster can include
+    // the local user and non-audio rows; if it is longer than the captured audio list,
+    // Meet usually has the local user first, so skip that first roster label for matching.
+    const audioParticipantNames = participantNames.length > state.gains.length
+      ? participantNames.slice(1)
+      : participantNames
 
-    const visibleRows = participantNames.map((participantName, index) => {
-      const item =
-        state.gains.find((gain) => gain.name === participantName) ||
-        state.gains[index] ||
-        null
+    const visibleRows = state.gains.map((item, index) => {
+      const participantName = item.name || audioParticipantNames[index] || `Audio ${index + 1}`
 
-      if (item && !item.name) {
+      if (!item.name) {
         item.name = participantName
 
         const saved = state.settings.gains?.[participantName]
@@ -473,7 +476,7 @@
       }
 
       return { participantName, item }
-    })
+    }).filter(({ participantName }) => !isHiddenParticipant(participantName))
 
     const list = document.createElement('div')
 
@@ -490,7 +493,7 @@
 
     if (!visibleRows.length) {
       const empty = document.createElement('div')
-      empty.textContent = 'Open People or click Load participants.'
+      empty.textContent = 'Waiting for remote audio controls...'
       empty.style.opacity = '0.75'
       list.appendChild(empty)
     }
