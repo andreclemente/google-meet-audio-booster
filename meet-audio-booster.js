@@ -3,7 +3,7 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v6'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v7'
 
   const state = {
     gains: [],
@@ -11,7 +11,9 @@
     participants: new Set(),
     panel: null,
     renderTimer: null,
-    listScrollTop: 0
+    listScrollTop: 0,
+    status: '',
+    loadingParticipants: false
   }
 
   window.__meetAudioBooster = state
@@ -21,10 +23,11 @@
       return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
         gains: {},
         position: null,
-        participants: []
+        participants: [],
+        hiddenParticipants: []
       }
     } catch {
-      return { gains: {}, position: null, participants: [] }
+      return { gains: {}, position: null, participants: [], hiddenParticipants: [] }
     }
   }
 
@@ -36,6 +39,29 @@
   ;(state.settings.participants || []).forEach((name) => {
     state.participants.add(name)
   })
+
+  function hiddenParticipants() {
+    state.settings.hiddenParticipants ||= []
+    return state.settings.hiddenParticipants
+  }
+
+  function isHiddenParticipant(name) {
+    return hiddenParticipants().some((hidden) => hidden.toLowerCase() === name.toLowerCase())
+  }
+
+  function hideParticipant(name) {
+    if (!isHiddenParticipant(name)) hiddenParticipants().push(name)
+    state.participants.delete(name)
+    saveSettings()
+    setStatus(`Hidden ${name}`)
+    renderPanel()
+  }
+
+  function setStatus(message) {
+    state.status = message
+    const status = document.getElementById('__meet_audio_booster_status')
+    if (status) status.textContent = message
+  }
 
   function cleanName(name) {
     return name
@@ -105,11 +131,23 @@
     return /(^|[\s(])you([\s)]|$)/i.test(text || '')
   }
 
+  function isSelfParticipantElement(el) {
+    const row = el?.closest?.('[data-participant-id], [role="listitem"], [role="gridcell"]') || el
+    const text = row?.textContent || ''
+    if (isSelfParticipantText(text)) return true
+
+    return [...(row?.querySelectorAll?.('[aria-label]') || [])].some((node) => {
+      const label = node.getAttribute('aria-label') || ''
+      return /^your\b/i.test(label) || /\byou are\b/i.test(label) || /\byou\s+\(/i.test(label) ||
+        /^(mute|unmute|turn (on|off)) your (microphone|camera)$/i.test(label)
+    })
+  }
+
   function addParticipantName(names, rawName) {
     if (isSelfParticipantText(rawName)) return
 
     const name = cleanName(rawName)
-    if (!isValidParticipantName(name)) return
+    if (!isValidParticipantName(name) || isHiddenParticipant(name)) return
 
     const canonical = name.toLowerCase()
     const duplicate = [...names].some((existing) => existing.toLowerCase() === canonical)
@@ -122,8 +160,8 @@
       const row = el.closest?.('[data-participant-id], [role="listitem"], [role="gridcell"]')
       const rowText = row?.textContent || ''
 
-      // Google Meet marks your own People-panel row with "(You)". Do not add it.
-      if (isSelfParticipantText(rowText)) return
+      // Google Meet marks your own People-panel row with "(You)" or local controls like "your microphone".
+      if (isSelfParticipantText(rowText) || isSelfParticipantElement(el)) return
 
       const matches = [
         label.match(/^Mute (.+)'s microphone$/i),
@@ -194,30 +232,39 @@
   }
 
   async function loadAllParticipants() {
-    const peopleButton = findPeopleButton()
-    peopleButton?.click()
+    state.loadingParticipants = true
+    setStatus('Loading participants...')
+    renderPanel()
 
-    await wait(700)
-    scrapeParticipantNames()
+    try {
+      const peopleButton = findPeopleButton()
+      peopleButton?.click()
 
-    const containers = getScrollableContainers()
+      await wait(700)
+      scrapeParticipantNames()
 
-    for (const container of containers) {
-      const originalTop = container.scrollTop
-      const maxTop = container.scrollHeight - container.clientHeight
-      const step = Math.max(80, Math.floor(container.clientHeight * 0.8))
+      const containers = getScrollableContainers()
 
-      for (let top = 0; top <= maxTop + step; top += step) {
-        container.scrollTop = Math.min(top, maxTop)
-        await wait(90)
-        scrapeParticipantNames(container)
+      for (const container of containers) {
+        const originalTop = container.scrollTop
+        const maxTop = container.scrollHeight - container.clientHeight
+        const step = Math.max(80, Math.floor(container.clientHeight * 0.8))
+
+        for (let top = 0; top <= maxTop + step; top += step) {
+          container.scrollTop = Math.min(top, maxTop)
+          await wait(90)
+          scrapeParticipantNames(container)
+        }
+
+        container.scrollTop = originalTop
       }
 
-      container.scrollTop = originalTop
+      const names = scrapeParticipantNames()
+      setStatus(`Loaded ${names.length} participants`)
+    } finally {
+      state.loadingParticipants = false
+      renderPanel()
     }
-
-    scrapeParticipantNames()
-    renderPanel()
   }
 
   function applyGain(item, value) {
@@ -396,7 +443,7 @@
 
     makeDraggable(panel, header)
 
-    const participantNames = [...state.participants]
+    const participantNames = [...state.participants].filter((name) => !isHiddenParticipant(name))
 
     const visibleRows = participantNames.map((participantName, index) => {
       const item =
@@ -493,6 +540,7 @@
 
         applyGain(item, next)
         value.textContent = `${Math.round(next * 100)}%`
+        setStatus(`${participantName}: ${Math.round(next * 100)}%`)
       }
 
       const buttons = document.createElement('div')
@@ -509,6 +557,7 @@
         slider.value = '0'
         applyGain(item, 0)
         value.textContent = '0%'
+        setStatus(`${participantName}: muted`)
       }, !hasAudioControl))
 
       buttons.appendChild(makeButton('50%', () => {
@@ -516,6 +565,7 @@
         slider.value = '0.5'
         applyGain(item, 0.5)
         value.textContent = '50%'
+        setStatus(`${participantName}: 50%`)
       }, !hasAudioControl))
 
       buttons.appendChild(makeButton('100%', () => {
@@ -523,6 +573,7 @@
         slider.value = '1'
         applyGain(item, 1)
         value.textContent = '100%'
+        setStatus(`${participantName}: 100%`)
       }, !hasAudioControl))
 
       buttons.appendChild(makeButton('250%', () => {
@@ -530,7 +581,12 @@
         slider.value = '2.5'
         applyGain(item, 2.5)
         value.textContent = '250%'
+        setStatus(`${participantName}: 250%`)
       }, !hasAudioControl))
+
+      buttons.appendChild(makeButton('Hide', () => {
+        hideParticipant(participantName)
+      }))
 
       row.appendChild(top)
       row.appendChild(slider)
@@ -551,8 +607,12 @@
       flexWrap: 'wrap'
     })
 
-    footer.appendChild(makeButton('Load all participants', loadAllParticipants))
-    footer.appendChild(makeButton('Refresh', renderPanel))
+    footer.appendChild(makeButton('Load all participants', loadAllParticipants, state.loadingParticipants, state.loadingParticipants ? 'Loading...' : null))
+    footer.appendChild(makeButton('Refresh', () => {
+      setStatus('Refreshing...')
+      renderPanel()
+      setStatus('Refreshed')
+    }))
 
     footer.appendChild(makeButton('Reset', () => {
       visibleRows.forEach(({ item }) => {
@@ -560,18 +620,30 @@
       })
 
       renderPanel()
+      setStatus('Reset all visible controls')
     }))
 
     panel.appendChild(footer)
+
+    const status = document.createElement('div')
+    status.id = '__meet_audio_booster_status'
+    status.textContent = state.status
+    Object.assign(status.style, {
+      minHeight: '14px',
+      marginTop: '6px',
+      color: '#bdc1c6',
+      fontSize: '11px'
+    })
+    panel.appendChild(status)
 
     document.documentElement.appendChild(panel)
     list.scrollTop = state.listScrollTop
     state.panel = panel
   }
 
-  function makeButton(text, onClick, disabled = false) {
+  function makeButton(text, onClick, disabled = false, busyText = null) {
     const btn = document.createElement('button')
-    btn.textContent = text
+    btn.textContent = busyText || text
     btn.disabled = disabled
 
     Object.assign(btn.style, buttonStyle())
@@ -581,7 +653,20 @@
       btn.style.cursor = 'not-allowed'
     }
 
-    btn.onclick = onClick
+    btn.onclick = async () => {
+      if (btn.disabled) return
+
+      const originalText = btn.textContent
+      btn.textContent = 'Working...'
+      btn.disabled = true
+
+      try {
+        await onClick?.()
+      } finally {
+        btn.textContent = originalText
+        btn.disabled = false
+      }
+    }
 
     return btn
   }
