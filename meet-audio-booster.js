@@ -3,14 +3,15 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v4'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v5'
 
   const state = {
     gains: [],
     settings: loadSettings(),
     participants: new Set(),
     panel: null,
-    renderTimer: null
+    renderTimer: null,
+    listScrollTop: 0
   }
 
   window.__meetAudioBooster = state
@@ -39,6 +40,12 @@
   function cleanName(name) {
     return name
       ?.replace(/\s+\(.*?\)$/, '')
+      .replace(/^Mute\s+(.+?)'s microphone$/i, '$1')
+      .replace(/^Unmute\s+(.+?)'s microphone$/i, '$1')
+      .replace(/^Ask\s+(.+?)\s+to unmute$/i, '$1')
+      .replace(/^Mute\s+/i, '')
+      .replace(/^Unmute\s+/i, '')
+      .replace(/'s microphone$/i, '')
       .replace(/\s+/g, ' ')
       .trim()
   }
@@ -96,7 +103,11 @@
 
   function addParticipantName(names, rawName) {
     const name = cleanName(rawName)
-    if (isValidParticipantName(name)) names.add(name)
+    if (!isValidParticipantName(name)) return
+
+    const canonical = name.toLowerCase()
+    const duplicate = [...names].some((existing) => existing.toLowerCase() === canonical)
+    if (!duplicate) names.add(name)
   }
 
   function scrapeNamesFromRoot(root, names) {
@@ -131,7 +142,8 @@
   }
 
   function scrapeParticipantNames(root = document) {
-    const names = new Set(state.participants)
+    const names = new Set()
+    state.participants.forEach((name) => addParticipantName(names, name))
     scrapeNamesFromRoot(root, names)
 
     state.participants = names
@@ -399,6 +411,11 @@
       paddingRight: '4px'
     })
 
+    list.scrollTop = state.listScrollTop
+    list.addEventListener('scroll', () => {
+      state.listScrollTop = list.scrollTop
+    })
+
     if (!visibleRows.length) {
       const empty = document.createElement('div')
       empty.textContent = 'Open People or click Load participants.'
@@ -537,6 +554,7 @@
     panel.appendChild(footer)
 
     document.documentElement.appendChild(panel)
+    list.scrollTop = state.listScrollTop
     state.panel = panel
   }
 
@@ -576,7 +594,10 @@
     }
 
     renderPanel()
-    setInterval(renderPanel, 5000)
+    setInterval(() => {
+      scrapeParticipantNames()
+      if (!state.panel?.isConnected) renderPanel()
+    }, 5000)
   }
 
   boot()
