@@ -3,7 +3,7 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v10'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v11'
 
   const state = {
     gains: [],
@@ -462,25 +462,35 @@
     makeDraggable(panel, header)
 
     const participantNames = [...state.participants].filter((name) => !isHiddenParticipant(name))
-    // Render only captured Meet audio gain nodes. The roster is only a label source.
-    // If Meet includes the local user in the roster, it is usually the extra first row.
+    // Render discovered remote roster rows so the panel is not capped by the number
+    // of currently materialized Meet gain nodes. Gain nodes are attached by index
+    // when available; rows without one stay disabled until Meet creates audio for them.
     const audioParticipantNames = participantNames.length === state.gains.length + 1
       ? participantNames.slice(1)
       : participantNames
 
-    const visibleRows = state.gains.map((item, index) => {
-      const candidateName = audioParticipantNames[index]
-      const participantName = candidateName || item.name || `Audio ${index + 1}`
+    const rosterRows = audioParticipantNames.map((participantName, index) => {
+      const item = state.gains[index] || null
 
-      if (candidateName && (!item.name || isGenericAudioName(item.name))) {
-        item.name = candidateName
+      if (item && (!item.name || isGenericAudioName(item.name))) {
+        item.name = participantName
 
-        const saved = state.settings.gains?.[candidateName]
+        const saved = state.settings.gains?.[participantName]
         if (typeof saved === 'number') applyGain(item, saved)
       }
 
       return { participantName, item }
-    }).filter(({ participantName }) => !isHiddenParticipant(participantName))
+    })
+
+    const extraGainRows = state.gains.slice(rosterRows.length).map((item, offset) => {
+      const index = rosterRows.length + offset
+      const participantName = item.name || `Audio ${index + 1}`
+      if (!item.name) item.name = participantName
+      return { participantName, item }
+    })
+
+    const visibleRows = [...rosterRows, ...extraGainRows]
+      .filter(({ participantName }) => !isHiddenParticipant(participantName))
 
     const list = document.createElement('div')
 
