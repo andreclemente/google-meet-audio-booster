@@ -3,7 +3,7 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v7'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v8'
 
   const state = {
     gains: [],
@@ -143,6 +143,17 @@
     })
   }
 
+  function rememberSelfParticipantFromElement(el) {
+    const row = el?.closest?.('[data-participant-id], [role="listitem"], [role="gridcell"]') || el
+    const candidate = (row?.textContent || '')
+      .split('\n')
+      .map(cleanName)
+      .find(isValidParticipantName)
+
+    if (candidate && !isHiddenParticipant(candidate)) hiddenParticipants().push(candidate)
+    if (candidate) state.participants.delete(candidate)
+  }
+
   function addParticipantName(names, rawName) {
     if (isSelfParticipantText(rawName)) return
 
@@ -161,7 +172,10 @@
       const rowText = row?.textContent || ''
 
       // Google Meet marks your own People-panel row with "(You)" or local controls like "your microphone".
-      if (isSelfParticipantText(rowText) || isSelfParticipantElement(el)) return
+      if (isSelfParticipantText(rowText) || isSelfParticipantElement(el)) {
+        rememberSelfParticipantFromElement(el)
+        return
+      }
 
       const matches = [
         label.match(/^Mute (.+)'s microphone$/i),
@@ -584,7 +598,7 @@
         setStatus(`${participantName}: 250%`)
       }, !hasAudioControl))
 
-      buttons.appendChild(makeButton('Hide', () => {
+      buttons.appendChild(makeButton("It's me", () => {
         hideParticipant(participantName)
       }))
 
@@ -612,6 +626,13 @@
       setStatus('Refreshing...')
       renderPanel()
       setStatus('Refreshed')
+    }))
+
+    footer.appendChild(makeButton('Reset hidden', () => {
+      state.settings.hiddenParticipants = []
+      saveSettings()
+      setStatus('Hidden list reset')
+      renderPanel()
     }))
 
     footer.appendChild(makeButton('Reset', () => {
