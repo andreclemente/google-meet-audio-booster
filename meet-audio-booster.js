@@ -3,7 +3,7 @@
 
   window.__meetAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meet_audio_booster_settings_v5'
+  const STORAGE_KEY = '__meet_audio_booster_settings_v6'
 
   const state = {
     gains: [],
@@ -101,7 +101,13 @@
     )
   }
 
+  function isSelfParticipantText(text) {
+    return /(^|[\s(])you([\s)]|$)/i.test(text || '')
+  }
+
   function addParticipantName(names, rawName) {
+    if (isSelfParticipantText(rawName)) return
+
     const name = cleanName(rawName)
     if (!isValidParticipantName(name)) return
 
@@ -113,6 +119,11 @@
   function scrapeNamesFromRoot(root, names) {
     root.querySelectorAll?.('[aria-label], [data-participant-id], [role="listitem"], [role="gridcell"]').forEach((el) => {
       const label = el.getAttribute?.('aria-label') || ''
+      const row = el.closest?.('[data-participant-id], [role="listitem"], [role="gridcell"]')
+      const rowText = row?.textContent || ''
+
+      // Google Meet marks your own People-panel row with "(You)". Do not add it.
+      if (isSelfParticipantText(rowText)) return
 
       const matches = [
         label.match(/^Mute (.+)'s microphone$/i),
