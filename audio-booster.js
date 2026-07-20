@@ -2,7 +2,7 @@
   if (window.__meetingAudioBoosterInstalled) return
   window.__meetingAudioBoosterInstalled = true
 
-  const STORAGE_KEY = '__meeting_audio_booster_v14'
+  const STORAGE_KEY = '__meeting_audio_booster_v15'
   const PANEL_ID = '__meeting_audio_booster_panel'
   const AudioContextClass = window.AudioContext || window.webkitAudioContext
 
@@ -17,11 +17,17 @@
     sharedCtx: null,
 
     google: {
+      mode: 'detecting',
+      modeStartedAt: performance.now(),
       slots: [],
       originalConnect: null,
       scanTimer: null,
       routerTimer: null,
+      mediaScanTimer: null,
       slotCounter: 0,
+      mediaCounter: 0,
+      mediaPipelines: [],
+      mediaByElement: new WeakMap(),
       activeParticipantKey: null,
       lastSpeakerSeenAt: 0,
       rosterSignature: ''
@@ -34,6 +40,9 @@
 
   window.__meetingAudioBooster = state
   window.__meetingAudioBoosterDebug = getDebugInfo
+  window.__meetingAudioBoosterShow = showPanel
+  window.__meetingAudioBoosterHide = hidePanel
+  window.__meetingAudioBoosterToggle = togglePanel
 
   function loadSettings() {
     try {
@@ -235,7 +244,7 @@
       participant.platform === 'google-meet' &&
       state.google.activeParticipantKey === participant.key
     ) {
-      setAllGoogleSlots(value, true)
+      setAllGoogleOutputs(value, true)
     }
 
     updateLiveUi()
@@ -246,6 +255,30 @@
 
     const status = document.getElementById(`${PANEL_ID}_status`)
     if (status) status.textContent = message
+  }
+
+  function showPanel() {
+    state.closed = false
+
+    const panel = document.getElementById(PANEL_ID)
+    if (panel) panel.style.display = 'block'
+
+    renderPanel()
+  }
+
+  function hidePanel() {
+    state.closed = true
+
+    const panel = document.getElementById(PANEL_ID)
+    if (panel) panel.style.display = 'none'
+  }
+
+  function togglePanel() {
+    if (state.closed) {
+      showPanel()
+    } else {
+      hidePanel()
+    }
   }
 
   function renderSoon() {
@@ -267,9 +300,11 @@
 
   function initGoogleMeet() {
     hookGoogleAudioSlots()
+    scanGoogleMediaElements()
     scanGoogleParticipants()
 
     state.google.scanTimer = setInterval(scanGoogleParticipants, 750)
+    state.google.mediaScanTimer = setInterval(scanGoogleMediaElements, 500)
     state.google.routerTimer = setInterval(routeGoogleAudio, 60)
   }
 
@@ -309,6 +344,7 @@
     }
 
     state.google.slots.push(slot)
+    setGoogleMode('worklet')
     setGoogleSlotMultiplier(slot, currentGoogleMultiplier(), true)
     setStatus(
       `Detected ${state.google.slots.length} Google Meet audio slot${state.google.slots.length === 1 ? '' : 's'}`
@@ -364,6 +400,260 @@
     })
   }
 
+
+  function scanGoogleMediaElements() {
+    const seen = new Set()
+
+    document.querySelectorAll('audio').forEach((audio) => {
+      const stream = audio.srcObject
+      if (!(stream instanceof MediaStream)) return
+
+      const tracks = stream.getAudioTracks?.() || []
+      if (!tracks.length) return
+      if (tracks.every((track) => track.readyState === 'ended')) return
+
+      const streamKey = [
+        stream.id || 'stream',
+        ...tracks.map((track) => track.id)
+      ].join('|')
+
+      seen.add(streamKey)
+
+      const byElement = state.google.mediaByElement.get(audio)
+      if (byElement?.streamKey === streamKey) return
+
+      if (byElement) {
+        teardownGoogleMediaPipeline(byElement)
+      }
+
+      const duplicate = state.google.mediaPipelines.find(
+        (pipeline) => pipeline.streamKey === streamKey
+      )
+
+      if (duplicate) {
+        state.google.mediaByElement.set(audio, duplicate)
+        duplicate.elements.add(audio)
+        return
+      }
+
+      createGoogleMediaPipeline(audio, stream, tracks, streamKey)
+    })
+
+    for (const pipeline of [...state.google.mediaPipelines]) {
+      const hasLiveElement = [...pipeline.elements].some((audio) => {
+        return (
+          audio.isConnected &&
+          audio.srcObject instanceof MediaStream &&
+          getGoogleMediaStreamKey(audio.srcObject) === pipeline.streamKey
+        )
+      })
+
+      const hasLiveTrack = pipeline.tracks.some(
+        (track) => track.readyState !== 'ended'
+      )
+
+      if (!seen.has(pipeline.streamKey) || !hasLiveElement || !hasLiveTrack) {
+        teardownGoogleMediaPipeline(pipeline)
+      }
+    }
+
+    if (state.google.slots.length) {
+      setGoogleMode('worklet')
+    } else if (
+      state.google.mediaPipelines.length &&
+      performance.now() - state.google.modeStartedAt > 1200
+    ) {
+      setGoogleMode('media')
+    }
+  }
+
+  function getGoogleMediaStreamKey(stream) {
+    if (!(stream instanceof MediaStream)) return ''
+
+    return [
+      stream.id || 'stream',
+      ...(stream.getAudioTracks?.() || []).map((track) => track.id)
+    ].join('|')
+  }
+
+  function createGoogleMediaPipeline(audio, stream, tracks, streamKey) {
+    const ctx = getSharedAudioContext()
+    if (!ctx) return
+
+    let source
+    let gain
+
+    try {
+      source = ctx.createMediaStreamSource(stream)
+      gain = ctx.createGain()
+      source.connect(gain)
+    } catch {
+      return
+    }
+
+    const pipeline = {
+      id: `media-${++state.google.mediaCounter}`,
+      streamKey,
+      stream,
+      tracks,
+      source,
+      gain,
+      elements: new Set([audio]),
+      connected: false,
+      appliedMultiplier: 1,
+      targetValue: 1,
+      originalStates: new WeakMap()
+    }
+
+    state.google.mediaPipelines.push(pipeline)
+    state.google.mediaByElement.set(audio, pipeline)
+
+    if (state.google.mode === 'media') {
+      activateGoogleMediaPipeline(pipeline)
+      setGoogleMediaPipelineMultiplier(
+        pipeline,
+        currentGoogleMultiplier(),
+        true
+      )
+    }
+
+    renderSoon()
+  }
+
+  function rememberGoogleMediaElementState(pipeline, audio) {
+    if (pipeline.originalStates.has(audio)) return
+
+    pipeline.originalStates.set(audio, {
+      muted: audio.muted,
+      volume: audio.volume
+    })
+  }
+
+  function activateGoogleMediaPipeline(pipeline) {
+    if (!pipeline) return
+
+    for (const audio of pipeline.elements) {
+      rememberGoogleMediaElementState(pipeline, audio)
+      audio.muted = true
+      audio.volume = 0
+    }
+
+    if (!pipeline.connected) {
+      try {
+        pipeline.gain.connect(getSharedAudioContext().destination)
+        pipeline.connected = true
+      } catch {}
+    }
+
+    const ctx = getSharedAudioContext()
+    if (ctx?.state === 'suspended') {
+      ctx.resume?.().catch?.(() => {})
+    }
+  }
+
+  function deactivateGoogleMediaPipeline(pipeline) {
+    if (!pipeline) return
+
+    if (pipeline.connected) {
+      try {
+        pipeline.gain.disconnect()
+      } catch {}
+
+      pipeline.connected = false
+    }
+
+    for (const audio of pipeline.elements) {
+      const original = pipeline.originalStates.get(audio)
+      if (!original) continue
+
+      audio.muted = original.muted
+      audio.volume = original.volume
+    }
+  }
+
+  function teardownGoogleMediaPipeline(pipeline) {
+    if (!pipeline) return
+
+    deactivateGoogleMediaPipeline(pipeline)
+
+    try {
+      pipeline.source.disconnect()
+    } catch {}
+
+    try {
+      pipeline.gain.disconnect()
+    } catch {}
+
+    for (const audio of pipeline.elements) {
+      if (state.google.mediaByElement.get(audio) === pipeline) {
+        state.google.mediaByElement.delete(audio)
+      }
+    }
+
+    state.google.mediaPipelines = state.google.mediaPipelines.filter(
+      (candidate) => candidate !== pipeline
+    )
+
+    renderSoon()
+  }
+
+  function setGoogleMediaPipelineMultiplier(
+    pipeline,
+    multiplier,
+    immediate = false
+  ) {
+    const safeMultiplier = Number.isFinite(multiplier)
+      ? Math.max(0, multiplier)
+      : 1
+
+    pipeline.appliedMultiplier = safeMultiplier
+    pipeline.targetValue = safeMultiplier
+
+    if (state.google.mode !== 'media' && !immediate) return
+
+    activateGoogleMediaPipeline(pipeline)
+    writeAudioParam(pipeline.gain.gain, safeMultiplier)
+  }
+
+  function setAllGoogleMediaPipelines(multiplier, immediate = false) {
+    state.google.mediaPipelines.forEach((pipeline) => {
+      setGoogleMediaPipelineMultiplier(pipeline, multiplier, immediate)
+    })
+  }
+
+  function setGoogleMode(mode) {
+    if (mode === state.google.mode) return
+
+    state.google.mode = mode
+
+    if (mode === 'worklet') {
+      state.google.mediaPipelines.forEach(deactivateGoogleMediaPipeline)
+      setAllGoogleSlots(currentGoogleMultiplier(), true)
+    }
+
+    if (mode === 'media') {
+      state.google.mediaPipelines.forEach((pipeline) => {
+        activateGoogleMediaPipeline(pipeline)
+        setGoogleMediaPipelineMultiplier(
+          pipeline,
+          currentGoogleMultiplier(),
+          true
+        )
+      })
+    }
+
+    renderSoon()
+  }
+
+  function setAllGoogleOutputs(multiplier, immediate = false) {
+    if (state.google.mode === 'media') {
+      setAllGoogleMediaPipelines(multiplier, immediate)
+      return
+    }
+
+    setAllGoogleSlots(multiplier, immediate)
+  }
+
   function currentGoogleMultiplier() {
     const participant = state.participants.get(state.google.activeParticipantKey)
     return participant?.present ? participant.value : 1
@@ -372,18 +662,25 @@
   function scanGoogleParticipants() {
     const now = Date.now()
     const foundKeys = new Set()
-    const candidates = new Set()
+    const rootsByParticipantId = new Map()
 
-    document
-      .querySelectorAll(
-        '[data-participant-id], [role="listitem"], [role="gridcell"], [aria-label*="speaking" i]'
-      )
-      .forEach((element) => {
-        const root = getGoogleParticipantRoot(element)
-        if (root) candidates.add(root)
-      })
+    // Only Meet elements carrying a participant ID are eligible. Chat
+    // messages, reactions and side-panel rows also use list/grid roles, so
+    // scanning generic role elements creates fake participants.
+    document.querySelectorAll('[data-participant-id]').forEach((element) => {
+      const participantId = element.getAttribute('data-participant-id')
+      if (!participantId) return
 
-    candidates.forEach((root) => {
+      const current = rootsByParticipantId.get(participantId)
+      const score = scoreGoogleParticipantRoot(element)
+      const currentScore = current ? scoreGoogleParticipantRoot(current) : -1
+
+      if (!current || score > currentScore) {
+        rootsByParticipantId.set(participantId, element)
+      }
+    })
+
+    rootsByParticipantId.forEach((root) => {
       const data = extractGoogleParticipant(root)
       if (!data) return
 
@@ -401,44 +698,6 @@
         }
       })
     })
-
-    // Fallback for layouts where only action aria-labels expose the name.
-    document
-      .querySelectorAll('button[aria-label], div[aria-label], span[aria-label]')
-      .forEach((element) => {
-        const label = element.getAttribute('aria-label') || ''
-        const name = extractGoogleNameFromText(label)
-
-        if (!isValidParticipantName(name) || isSelfText(label)) return
-
-        const root = getGoogleParticipantRoot(element)
-        if (root && isSelfGoogleParticipant(root)) return
-
-        const participantId =
-          root?.getAttribute?.('data-participant-id') ||
-          root?.querySelector?.('[data-participant-id]')?.getAttribute('data-participant-id') ||
-          null
-
-        const key = participantId
-          ? `id:${participantId}`
-          : `name:${normalizeName(name)}`
-
-        const speaking = isGoogleParticipantSpeaking(root || element)
-
-        foundKeys.add(key)
-        upsertParticipant({
-          key,
-          platform: 'google-meet',
-          name,
-          present: true,
-          speaking,
-          lastSeenAt: now,
-          extra: {
-            participantId,
-            element: root || element
-          }
-        })
-      })
 
     for (const participant of state.participants.values()) {
       if (participant.platform !== 'google-meet') continue
@@ -462,14 +721,27 @@
     }
   }
 
+  function scoreGoogleParticipantRoot(element) {
+    if (!element) return -1
+
+    let score = 0
+
+    if (element.matches?.('.BlxGDf') || element.querySelector?.('.BlxGDf')) {
+      score += 10000
+    }
+
+    if (element.querySelector?.('[aria-label^="More options for "]')) {
+      score += 1000
+    }
+
+    score += Math.min((element.innerText || '').length, 500)
+    score += Math.min(element.querySelectorAll?.('*').length || 0, 500)
+
+    return score
+  }
+
   function getGoogleParticipantRoot(element) {
-    return (
-      element?.closest?.('[data-participant-id]') ||
-      element?.closest?.('[role="listitem"]') ||
-      element?.closest?.('[role="gridcell"]') ||
-      element ||
-      null
-    )
+    return element?.closest?.('[data-participant-id]') || null
   }
 
   function extractGoogleParticipant(root) {
@@ -648,12 +920,12 @@
 
     if (nextKey !== state.google.activeParticipantKey) {
       state.google.activeParticipantKey = nextKey
-      setAllGoogleSlots(activeParticipant?.value ?? 1, true)
+      setAllGoogleOutputs(activeParticipant?.value ?? 1, true)
     } else if (activeParticipant) {
-      setAllGoogleSlots(activeParticipant.value)
+      setAllGoogleOutputs(activeParticipant.value)
     } else {
       // No reliable active-speaker identity: never leave an old boost behind.
-      setAllGoogleSlots(1)
+      setAllGoogleOutputs(1)
     }
 
     setStatus(status)
@@ -850,11 +1122,18 @@
   function renderPanel() {
     if (!document.documentElement || state.closed) return
 
-    document.getElementById(PANEL_ID)?.remove()
-
     const participants = getVisibleParticipants()
-    const panel = document.createElement('div')
-    panel.id = PANEL_ID
+    let panel = document.getElementById(PANEL_ID)
+
+    if (!panel) {
+      panel = document.createElement('div')
+      panel.id = PANEL_ID
+      document.documentElement.appendChild(panel)
+    } else {
+      panel.replaceChildren()
+    }
+
+    panel.style.display = 'block'
 
     Object.assign(panel.style, {
       position: 'fixed',
@@ -908,7 +1187,7 @@
     const subtitle = document.createElement('div')
     subtitle.textContent =
       state.platform === 'google-meet'
-        ? `${participants.length} participant${participants.length === 1 ? '' : 's'} · ${state.google.slots.length} audio slot${state.google.slots.length === 1 ? '' : 's'}`
+        ? `${participants.length} participant${participants.length === 1 ? '' : 's'} · ${state.google.mode === 'media' ? state.google.mediaPipelines.length : state.google.slots.length} ${state.google.mode === 'media' ? 'media stream' : 'audio slot'}${(state.google.mode === 'media' ? state.google.mediaPipelines.length : state.google.slots.length) === 1 ? '' : 's'}`
         : `${participants.length} remote audio track${participants.length === 1 ? '' : 's'}`
 
     Object.assign(subtitle.style, {
@@ -920,10 +1199,7 @@
     titleWrap.appendChild(title)
     titleWrap.appendChild(subtitle)
 
-    const close = makeButton('×', () => {
-      state.closed = true
-      panel.remove()
-    })
+    const close = makeButton('×', hidePanel)
 
     Object.assign(close.style, {
       width: '26px',
@@ -982,7 +1258,7 @@
       })
 
       if (state.platform === 'google-meet') {
-        setAllGoogleSlots(currentGoogleMultiplier(), true)
+        setAllGoogleOutputs(currentGoogleMultiplier(), true)
       }
 
       renderPanel()
@@ -1003,9 +1279,12 @@
     })
 
     panel.appendChild(status)
-    document.documentElement.appendChild(panel)
-    state.panel = panel
 
+    if (!panel.isConnected) {
+      document.documentElement.appendChild(panel)
+    }
+
+    state.panel = panel
     updateLiveUi()
   }
 
@@ -1231,11 +1510,28 @@
         participantId: participant.participantId || null
       })),
       google: {
+        mode: state.google.mode,
         activeParticipantKey: state.google.activeParticipantKey,
         slots: state.google.slots.map((slot) => ({
           id: slot.id,
           baseGain: slot.baseGain,
-          appliedMultiplier: slot.appliedMultiplier
+          appliedMultiplier: slot.appliedMultiplier,
+          targetValue: slot.targetValue,
+          actualValue: Number(slot.gain?.gain?.value)
+        })),
+        mediaPipelines: state.google.mediaPipelines.map((pipeline) => ({
+          id: pipeline.id,
+          streamKey: pipeline.streamKey,
+          connected: pipeline.connected,
+          appliedMultiplier: pipeline.appliedMultiplier,
+          targetValue: pipeline.targetValue,
+          actualValue: Number(pipeline.gain?.gain?.value),
+          tracks: pipeline.tracks.map((track) => ({
+            id: track.id,
+            muted: track.muted,
+            enabled: track.enabled,
+            readyState: track.readyState
+          }))
         }))
       }
     }
