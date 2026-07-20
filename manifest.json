@@ -1,12 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "Meet Audio Booster",
-  "version": "1.0.2",
+  "name": "Meeting Audio Booster",
+  "version": "1.0.3",
   "description": "Per-participant volume controls for Google Meet and Jitsi Meet.",
+  "permissions": [
+    "scripting"
+  ],
   "host_permissions": [
     "https://meet.google.com/*",
     "https://meet.jit.si/*"
   ],
+  "action": {
+    "default_title": "Show Meeting Audio Booster"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
   "content_scripts": [
     {
       "matches": [
