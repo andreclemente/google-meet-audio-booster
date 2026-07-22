@@ -270,7 +270,7 @@
   // src/platforms/google-meet/participants.js
   function isSelfParticipant(root) {
     const text = root?.innerText || root?.textContent || "";
-    if (isSelfText(text)) return true;
+    if (/(^|\s)\(you\)(?=\s|$)/i.test(text)) return true;
     const labels = [...root?.querySelectorAll?.("[aria-label]") || []].map((element) => element.getAttribute("aria-label") || "");
     if (labels.some((label) => /^(Reframe|Backgrounds and effects)$/i.test(label))) return true;
     return labels.some((label) => /^your\b|\byou are\b|\byou\s+\(/i.test(label) || /^(mute|unmute|turn (?:on|off)) your (?:microphone|camera)$/i.test(label));
@@ -435,6 +435,7 @@
         this.appliedMultiplier = safe;
         this.targetValue = target;
         this.participantKey = null;
+        if (!immediate && safe === 1) return;
         if (!immediate && Number.isFinite(actual) && Math.abs(actual - target) <= 2e-3 && now - this.lastWriteAt < 90) return;
         writeAudioParam(gain.gain, target);
         this.lastWriteAt = now;

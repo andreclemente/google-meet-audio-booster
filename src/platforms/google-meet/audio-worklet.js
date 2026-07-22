@@ -32,6 +32,10 @@ export function createPooledSlot(gain, id) {
       this.appliedMultiplier = safe
       this.targetValue = target
       this.participantKey = null
+      // At neutral, Meet must retain ownership of later slot changes. In
+      // particular, it may mute a local presentation slot after connection;
+      // repeatedly forcing baseGain would make that local copy audible.
+      if (!immediate && safe === 1) return
       if (!immediate && Number.isFinite(actual) && Math.abs(actual - target) <= 0.002 && now - this.lastWriteAt < 90) return
       writeAudioParam(gain.gain, target)
       this.lastWriteAt = now

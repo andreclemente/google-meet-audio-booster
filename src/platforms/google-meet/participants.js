@@ -1,8 +1,8 @@
-import { isSelfText, extractNameFromParticipantRoot, isRecognizedParticipantRoot } from '../../shared/dom.js'
+import { extractNameFromParticipantRoot, isRecognizedParticipantRoot } from '../../shared/dom.js'
 
 export function isSelfParticipant(root) {
   const text = root?.innerText || root?.textContent || ''
-  if (isSelfText(text)) return true
+  if (/(^|\s)\(you\)(?=\s|$)/i.test(text)) return true
   const labels = [...(root?.querySelectorAll?.('[aria-label]') || [])]
     .map(element => element.getAttribute('aria-label') || '')
   if (labels.some(label => /^(Reframe|Backgrounds and effects)$/i.test(label))) return true

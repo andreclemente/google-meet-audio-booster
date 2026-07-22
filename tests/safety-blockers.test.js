@@ -5,8 +5,8 @@ import path from 'node:path'
 import { applyMediaPipelineOutputs, activateMediaModePipelines } from '../src/platforms/google-meet/index.js'
 import { createFreshAlignmentTracker, createAssociationLearner } from '../src/platforms/google-meet/association.js'
 import { routeGoogleAudio, createRoutingState } from '../src/platforms/google-meet/router.js'
-import { scanMeetParticipants } from '../src/platforms/google-meet/participants.js'
-import { installAudioWorkletHook } from '../src/platforms/google-meet/audio-worklet.js'
+import { scanMeetParticipants, isSelfParticipant } from '../src/platforms/google-meet/participants.js'
+import { installAudioWorkletHook, createPooledSlot } from '../src/platforms/google-meet/audio-worklet.js'
 import { createAudioContext } from '../src/shared/audio.js'
 import { createDebugInfo } from '../src/shared/debug.js'
 
@@ -71,6 +71,25 @@ test('stuck UI A cannot teach newly energetic B or leak muted/high A gain to B',
   assert.equal(pipelines[1].appliedMultiplier, 1)
 })
 
+test('neutral worklet routing does not override a later Meet-owned gain change', () => {
+  const writes = []
+  const gain = {
+    gain: {
+      value: 1,
+      context: { currentTime: 0 },
+      setValueAtTime(value) { writes.push(value); this.value = value }
+    }
+  }
+  const slot = createPooledSlot(gain, 'slot-1')
+
+  slot.neutral(true)
+  gain.gain.value = 0
+  slot.set(1)
+
+  assert.equal(gain.gain.value, 0)
+  assert.deepEqual(writes, [1])
+})
+
 test('stopping worklet hook does not overwrite a later AudioNode connect wrapper', () => {
   const originalAudioNode = globalThis.AudioNode
   function AudioNode() {}
@@ -94,6 +113,15 @@ test('AudioContext constructor failures are represented as unavailable', () => {
   const Original = globalThis.AudioContext
   globalThis.AudioContext = class { constructor() { throw new Error('denied') } }
   try { assert.equal(createAudioContext(), null) } finally { globalThis.AudioContext = Original }
+})
+
+test('remote mute helper text does not identify a participant as self', () => {
+  const root = {
+    innerText: "keep_outline Pin André Clemente mic_off You can't unmute someone else André Clemente",
+    textContent: "keep_outline Pin André Clemente mic_off You can't unmute someone else André Clemente",
+    querySelectorAll(selector) { return selector === '[aria-label]' ? [] : [] }
+  }
+  assert.equal(isSelfParticipant(root), false)
 })
 
 function namedNode(name) {
