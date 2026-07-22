@@ -461,6 +461,7 @@
       id,
       gain,
       baseGain,
+      nativeValue: baseGain,
       appliedMultiplier: 1,
       targetValue: baseGain,
       lastWriteAt: 0,
@@ -469,22 +470,29 @@
       participantKey: null,
       set(multiplier, immediate = false) {
         const safe = Number.isFinite(multiplier) ? Math.max(0, multiplier) : 1;
-        const target = baseGain * safe;
-        const actual = Number(gain?.gain?.value);
+        const actual = readAudioParam(gain.gain);
+        if (!this.modified || Math.abs(actual - this.targetValue) > 2e-3) this.nativeValue = actual;
+        const target = this.nativeValue * safe;
         const now = performance.now();
         this.appliedMultiplier = safe;
         this.targetValue = target;
         this.participantKey = null;
+        if (Math.abs(actual - target) <= 2e-3) {
+          this.modified = Math.abs(target - this.nativeValue) > 2e-3;
+          return;
+        }
         if (safe === 1 && !this.modified) return;
-        if (!immediate && Number.isFinite(actual) && Math.abs(actual - target) <= 2e-3 && now - this.lastWriteAt < 90) return;
+        if (!immediate && now - this.lastWriteAt < 90) return;
         writeAudioParam(gain.gain, target);
-        this.modified = safe !== 1;
+        this.modified = Math.abs(target - this.nativeValue) > 2e-3;
         this.lastWriteAt = now;
       },
       release() {
         const actual = readAudioParam(gain.gain);
+        if (this.modified && Math.abs(actual - this.targetValue) > 2e-3) this.nativeValue = actual;
+        if (this.modified && Math.abs(actual - this.nativeValue) > 2e-3) writeAudioParam(gain.gain, this.nativeValue);
         this.appliedMultiplier = 1;
-        this.targetValue = actual;
+        this.targetValue = this.nativeValue;
         this.participantKey = null;
         this.modified = false;
       },

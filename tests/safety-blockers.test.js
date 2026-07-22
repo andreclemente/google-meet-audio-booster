@@ -92,6 +92,7 @@ test('neutral worklet discovery leaves the native Meet gain untouched', () => {
 
   slot.set(2, true)
   gain.gain.value = 0
+  slot.set(2, true)
   slot.release()
   assert.equal(gain.gain.value, 0)
   assert.deepEqual(writes, [2, 1, 2])

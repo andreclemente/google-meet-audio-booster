@@ -21,29 +21,37 @@ export function installAudioWorkletHook(onSlot) {
 export function createPooledSlot(gain, id) {
   const baseGain = readAudioParam(gain.gain)
   return {
-    id, gain, baseGain, appliedMultiplier: 1, targetValue: baseGain, lastWriteAt: 0, modified: false,
+    id, gain, baseGain, nativeValue: baseGain, appliedMultiplier: 1, targetValue: baseGain, lastWriteAt: 0, modified: false,
     // A pooled slot is deliberately never assigned a participant identity.
     participantKey: null,
     set(multiplier, immediate = false) {
       const safe = Number.isFinite(multiplier) ? Math.max(0, multiplier) : 1
-      const target = baseGain * safe
-      const actual = Number(gain?.gain?.value)
+      const actual = readAudioParam(gain.gain)
+      if (!this.modified || Math.abs(actual - this.targetValue) > 0.002) this.nativeValue = actual
+      const target = this.nativeValue * safe
       const now = performance.now()
       this.appliedMultiplier = safe
       this.targetValue = target
       this.participantKey = null
-      // Discovery and idle routing must not touch Meet's own pooled gain. This
-      // keeps local presentation audio under Meet's native self-monitor policy.
+      // Discovery and idle routing must not touch Meet's own pooled gain. If
+      // Meet changes it (notably to 0 for self-presentation), that native value
+      // becomes the new baseline and is never overwritten by a multiplier.
+      if (Math.abs(actual - target) <= 0.002) {
+        this.modified = Math.abs(target - this.nativeValue) > 0.002
+        return
+      }
       if (safe === 1 && !this.modified) return
-      if (!immediate && Number.isFinite(actual) && Math.abs(actual - target) <= 0.002 && now - this.lastWriteAt < 90) return
+      if (!immediate && now - this.lastWriteAt < 90) return
       writeAudioParam(gain.gain, target)
-      this.modified = safe !== 1
+      this.modified = Math.abs(target - this.nativeValue) > 0.002
       this.lastWriteAt = now
     },
     release() {
       const actual = readAudioParam(gain.gain)
+      if (this.modified && Math.abs(actual - this.targetValue) > 0.002) this.nativeValue = actual
+      if (this.modified && Math.abs(actual - this.nativeValue) > 0.002) writeAudioParam(gain.gain, this.nativeValue)
       this.appliedMultiplier = 1
-      this.targetValue = actual
+      this.targetValue = this.nativeValue
       this.participantKey = null
       this.modified = false
     },
