@@ -36,16 +36,29 @@ export function isValidParticipantName(value) {
   return !/(?:microphone|camera|google meet|meeting|participant|presentation|screen)/i.test(name)
 }
 
+function participantNameLeaves(element) {
+  const names = []
+  const pending = [...(element.children || [])]
+  while (pending.length && names.length < 8) {
+    const child = pending.shift()
+    const children = [...(child.children || [])]
+    if (children.length) pending.unshift(...children)
+    else {
+      const name = cleanName(child.textContent)
+      if (isValidParticipantName(name)) names.push(name)
+    }
+  }
+  return names
+}
+
 function extractCandidateName(element) {
   const explicit = cleanName(element.getAttribute?.('data-participant-name') || element.getAttribute?.('data-self-name'))
   if (isValidParticipantName(explicit)) return explicit
 
   const aggregate = cleanName(element.textContent)
-  const childNames = [...(element.children || [])]
-    .map(child => cleanName(child.textContent))
-    .filter(isValidParticipantName)
-  if (childNames.length >= 2 && childNames.every(name => name === childNames[0]) && aggregate === childNames.join('')) {
-    return childNames[0]
+  const leafNames = participantNameLeaves(element)
+  if (leafNames.length >= 2 && leafNames.every(name => name === leafNames[0]) && aggregate === leafNames.join('')) {
+    return leafNames[0]
   }
   return aggregate
 }

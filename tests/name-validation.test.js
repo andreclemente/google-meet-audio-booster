@@ -27,21 +27,22 @@ test('does not accept arbitrary descendant button labels or chat text', () => {
   assert.equal(extractNameFromParticipantRoot(root), null)
 })
 
-test('collapses duplicate name spans inside a recognized Meet name wrapper', () => {
-  const duplicate = [
-    { textContent: 'FirstNameLastName' },
-    { textContent: 'FirstNameLastName' }
-  ]
+test('collapses duplicate nested name spans inside a recognized Meet name wrapper', () => {
+  const first = { textContent: 'FirstNameLastName', children: [] }
+  const second = { textContent: 'FirstNameLastName', children: [] }
+  const layout = {
+    textContent: 'FirstNameLastNameFirstNameLastName',
+    children: [first, second]
+  }
+  const nameElement = {
+    matches: selector => selector.includes('.zWGUib') && !selector.includes('button'),
+    getAttribute: () => null,
+    textContent: 'FirstNameLastNameFirstNameLastName',
+    children: [layout]
+  }
   const root = {
     getAttribute(name) { return name === 'data-participant-id' ? 'p1' : null },
-    querySelectorAll() {
-      return [{
-        matches: selector => selector.includes('.zWGUib') && !selector.includes('button'),
-        getAttribute: () => null,
-        textContent: 'FirstNameLastNameFirstNameLastName',
-        children: duplicate
-      }]
-    }
+    querySelectorAll() { return [nameElement] }
   }
   assert.equal(extractNameFromParticipantRoot(root), 'FirstNameLastName')
 })
