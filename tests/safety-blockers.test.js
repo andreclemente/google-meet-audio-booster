@@ -8,6 +8,7 @@ import { routeGoogleAudio, createRoutingState } from '../src/platforms/google-me
 import { scanMeetParticipants, isSelfParticipant, isLocalPresentationRoot } from '../src/platforms/google-meet/participants.js'
 import { installAudioWorkletHook, createPooledSlot } from '../src/platforms/google-meet/audio-worklet.js'
 import { createAudioContext } from '../src/shared/audio.js'
+import { installLocalPresentationCaptureHook } from '../src/platforms/google-meet/presentation.js'
 import { createDebugInfo } from '../src/shared/debug.js'
 
 test('media output applies a participant multiplier only to its selected pipeline', () => {
@@ -113,6 +114,30 @@ test('stopping worklet hook does not overwrite a later AudioNode connect wrapper
     globalThis.AudioNode = originalAudioNode
     delete globalThis.__meetingAudioBoosterWorkletHook
   }
+})
+
+test('display capture bypass activates before Meet receives the stream', async () => {
+  const events = []
+  let ended
+  const track = {
+    readyState: 'live',
+    addEventListener(type, callback) { if (type === 'ended') ended = callback }
+  }
+  const stream = { getVideoTracks: () => [track], getTracks: () => [track] }
+  const original = async () => stream
+  const prototype = { getDisplayMedia: original }
+  const mediaDevices = Object.create(prototype)
+  const restore = installLocalPresentationCaptureHook(active => events.push(active), mediaDevices)
+
+  const returned = await mediaDevices.getDisplayMedia({ video: true, audio: true })
+  assert.equal(returned, stream)
+  assert.deepEqual(events, [true])
+
+  track.readyState = 'ended'
+  ended()
+  assert.deepEqual(events, [true, false])
+  restore()
+  assert.equal(prototype.getDisplayMedia, original)
 })
 
 test('AudioContext constructor failures are represented as unavailable', () => {

@@ -1,6 +1,7 @@
 import { scanMeetParticipants, observeMeetParticipants, isGoogleParticipantSpeaking, hasLocalPresentation } from './participants.js'
 import { createAssociationLearner, createFreshAlignmentTracker } from './association.js'
 import { createRoutingState, routeGoogleAudio } from './router.js'
+import { installLocalPresentationCaptureHook } from './presentation.js'
 import { installAudioWorkletHook, createPooledSlot } from './audio-worklet.js'
 import { createMediaPipelineManager } from './media-elements.js'
 import { upsertParticipant, visibleParticipants } from '../../state.js'
@@ -30,11 +31,13 @@ export function createGoogleMeetController({ state, context, setStatus, renderSo
   const learner = createAssociationLearner()
   const alignmentTracker = createFreshAlignmentTracker()
   const media = createMediaPipelineManager(context)
-  let restoreHook, observer, mutationTimer, reconcileTimer, mediaTimer, routingTimer, slotCounter = 0
+  let restoreHook, restoreCaptureHook, observer, mutationTimer, reconcileTimer, mediaTimer, routingTimer, slotCounter = 0
+  let capturePresentationActive = false
+  let domPresentationActive = false
 
   function participants() { return visibleParticipants(state, 'google-meet') }
-  function syncPresentationState() {
-    const presenting = hasLocalPresentation()
+  function applyPresentationState() {
+    const presenting = capturePresentationActive || domPresentationActive
     if (presenting === state.google.localPresentationActive) return presenting
     state.google.localPresentationActive = presenting
     if (presenting) {
@@ -48,6 +51,15 @@ export function createGoogleMeetController({ state, context, setStatus, renderSo
     }
     renderSoon()
     return presenting
+  }
+  function setCapturePresentationActive(active) {
+    capturePresentationActive = active
+    if (!active) domPresentationActive = hasLocalPresentation()
+    return applyPresentationState()
+  }
+  function syncPresentationState() {
+    domPresentationActive = hasLocalPresentation()
+    return applyPresentationState()
   }
   function setMode(mode) {
     if (state.google.mode === mode) return
@@ -184,6 +196,7 @@ export function createGoogleMeetController({ state, context, setStatus, renderSo
     updateLiveUi()
   }
   function start() {
+    restoreCaptureHook = installLocalPresentationCaptureHook(setCapturePresentationActive)
     restoreHook = installAudioWorkletHook(registerSlot)
     reconcile(); scanMedia()
     observer = observeMeetParticipants(() => {
@@ -197,6 +210,7 @@ export function createGoogleMeetController({ state, context, setStatus, renderSo
   }
   function stop() {
     observer?.disconnect(); clearTimeout(mutationTimer); clearInterval(reconcileTimer); clearInterval(mediaTimer); clearInterval(routingTimer)
+    restoreCaptureHook?.()
     restoreHook?.()
     if (state.google.localPresentationActive) for (const slot of state.google.slots) slot.release()
     else setOutputs(1, true)

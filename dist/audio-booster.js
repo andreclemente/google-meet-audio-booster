@@ -379,6 +379,34 @@
     };
   }
 
+  // src/platforms/google-meet/presentation.js
+  var HOOK_KEY = "__meetingAudioBoosterDisplayCaptureHook";
+  function installLocalPresentationCaptureHook(onActive, mediaDevices = globalThis.navigator?.mediaDevices) {
+    if (!mediaDevices) return () => {
+    };
+    const owner = Object.getPrototypeOf(mediaDevices) || mediaDevices;
+    const original = owner.getDisplayMedia;
+    if (typeof original !== "function" || owner[HOOK_KEY]) return () => {
+    };
+    const wrapped = async function(...args) {
+      const stream = await original.apply(this, args);
+      const videoTracks = stream?.getVideoTracks?.() || [];
+      const tracks = videoTracks.length ? videoTracks : stream?.getTracks?.() || [];
+      const checkEnded = () => {
+        if (tracks.length && tracks.every((track) => track.readyState === "ended")) onActive(false);
+      };
+      for (const track of tracks) track.addEventListener?.("ended", checkEnded, { once: true });
+      onActive(true);
+      return stream;
+    };
+    owner[HOOK_KEY] = wrapped;
+    owner.getDisplayMedia = wrapped;
+    return () => {
+      if (owner.getDisplayMedia === wrapped) owner.getDisplayMedia = original;
+      if (owner[HOOK_KEY] === wrapped) delete owner[HOOK_KEY];
+    };
+  }
+
   // src/shared/audio.js
   function readAudioParam(param, fallback = 1) {
     const value = Number(param?.value);
@@ -711,12 +739,14 @@
     const learner = createAssociationLearner();
     const alignmentTracker = createFreshAlignmentTracker();
     const media = createMediaPipelineManager(context);
-    let restoreHook, observer, mutationTimer, reconcileTimer, mediaTimer, routingTimer, slotCounter = 0;
+    let restoreHook, restoreCaptureHook, observer, mutationTimer, reconcileTimer, mediaTimer, routingTimer, slotCounter = 0;
+    let capturePresentationActive = false;
+    let domPresentationActive = false;
     function participants() {
       return visibleParticipants(state, "google-meet");
     }
-    function syncPresentationState() {
-      const presenting = hasLocalPresentation();
+    function applyPresentationState() {
+      const presenting = capturePresentationActive || domPresentationActive;
       if (presenting === state.google.localPresentationActive) return presenting;
       state.google.localPresentationActive = presenting;
       if (presenting) {
@@ -730,6 +760,15 @@
       }
       renderSoon();
       return presenting;
+    }
+    function setCapturePresentationActive(active) {
+      capturePresentationActive = active;
+      if (!active) domPresentationActive = hasLocalPresentation();
+      return applyPresentationState();
+    }
+    function syncPresentationState() {
+      domPresentationActive = hasLocalPresentation();
+      return applyPresentationState();
     }
     function setMode(mode) {
       if (state.google.mode === mode) return;
@@ -872,6 +911,7 @@
       updateLiveUi();
     }
     function start() {
+      restoreCaptureHook = installLocalPresentationCaptureHook(setCapturePresentationActive);
       restoreHook = installAudioWorkletHook(registerSlot);
       reconcile();
       scanMedia();
@@ -890,6 +930,7 @@
       clearInterval(reconcileTimer);
       clearInterval(mediaTimer);
       clearInterval(routingTimer);
+      restoreCaptureHook?.();
       restoreHook?.();
       if (state.google.localPresentationActive) for (const slot of state.google.slots) slot.release();
       else setOutputs(1, true);
