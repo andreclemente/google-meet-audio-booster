@@ -31,6 +31,20 @@ test('brief speaking-marker gaps do not pulse a confirmed participant gain', () 
   assert.equal(resumed.multiplier, 4.5)
 })
 
+test('default tracker tolerates the observed half-second Meet marker dropout', () => {
+  const tracker = createWorkletSpeakerTracker()
+  const alice = { key: 'A', name: 'Alice', value: 4.5 }
+
+  tracker.update({ now: 0, speakers: [alice], hidden: false })
+  tracker.update({ now: 60, speakers: [alice], hidden: false })
+  tracker.update({ now: 120, speakers: [], hidden: false })
+
+  const gap = tracker.update({ now: 620, speakers: [], hidden: false })
+  assert.equal(gap.routingState, 'confirmed-speaker')
+  assert.equal(gap.appliedParticipantKey, 'A')
+  assert.equal(gap.multiplier, 4.5)
+})
+
 test('a different visible speaker neutralizes a held gain immediately', () => {
   const tracker = createWorkletSpeakerTracker({ releaseHoldMs: 180 })
   const alice = { key: 'A', name: 'Alice', value: 4.5 }

@@ -732,7 +732,7 @@
       return participant.speaking;
     });
   }
-  function createWorkletSpeakerTracker({ confirmMs = 50, releaseHoldMs = 180 } = {}) {
+  function createWorkletSpeakerTracker({ confirmMs = 50, releaseHoldMs = 750 } = {}) {
     let confirmed = null;
     let candidateKey = null;
     let candidateSince = 0;
