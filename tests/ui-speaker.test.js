@@ -15,7 +15,7 @@ test('previous UI speaker is not held after the speaking marker clears', () => {
 })
 
 test('brief speaking-marker gaps do not pulse a confirmed participant gain', () => {
-  const tracker = createWorkletSpeakerTracker({ releaseHoldMs: 180 })
+  const tracker = createWorkletSpeakerTracker()
   const alice = { key: 'A', name: 'Alice', value: 4.5 }
 
   assert.equal(tracker.update({ now: 0, speakers: [alice], hidden: false }).routingState, 'transitioning')
@@ -45,8 +45,22 @@ test('default tracker tolerates the observed half-second Meet marker dropout', (
   assert.equal(gap.multiplier, 4.5)
 })
 
+test('confirmed boost remains latched without a speaking-marker timeout', () => {
+  const tracker = createWorkletSpeakerTracker()
+  const alice = { key: 'A', name: 'Alice', value: 4.5 }
+
+  tracker.update({ now: 0, speakers: [alice], hidden: false })
+  tracker.update({ now: 60, speakers: [alice], hidden: false })
+  tracker.update({ now: 120, speakers: [], hidden: false })
+
+  const longGap = tracker.update({ now: 30060, speakers: [], hidden: false })
+  assert.equal(longGap.routingState, 'confirmed-speaker')
+  assert.equal(longGap.appliedParticipantKey, 'A')
+  assert.equal(longGap.multiplier, 4.5)
+})
+
 test('a different visible speaker neutralizes a held gain immediately', () => {
-  const tracker = createWorkletSpeakerTracker({ releaseHoldMs: 180 })
+  const tracker = createWorkletSpeakerTracker()
   const alice = { key: 'A', name: 'Alice', value: 4.5 }
   const bob = { key: 'B', name: 'Bob', value: 1 }
 
@@ -61,7 +75,7 @@ test('a different visible speaker neutralizes a held gain immediately', () => {
 })
 
 test('hiding the Meet tab neutralizes and clears a confirmed worklet gain', () => {
-  const tracker = createWorkletSpeakerTracker({ releaseHoldMs: 180 })
+  const tracker = createWorkletSpeakerTracker()
   const alice = { key: 'A', name: 'Alice', value: 4.5 }
 
   tracker.update({ now: 0, speakers: [alice], hidden: false })

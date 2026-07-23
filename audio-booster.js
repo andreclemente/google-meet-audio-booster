@@ -732,11 +732,10 @@
       return participant.speaking;
     });
   }
-  function createWorkletSpeakerTracker({ confirmMs = 50, releaseHoldMs = 750 } = {}) {
+  function createWorkletSpeakerTracker({ confirmMs = 50 } = {}) {
     let confirmed = null;
     let candidateKey = null;
     let candidateSince = 0;
-    let markerMissingSince = null;
     function result(routingState, participant = null, multiplier = 1) {
       return {
         routingState,
@@ -751,7 +750,6 @@
       confirmed = null;
       candidateKey = null;
       candidateSince = 0;
-      markerMissingSince = null;
       return result(routingState);
     }
     function update({ now, speakers = [], hidden = false }) {
@@ -759,7 +757,6 @@
       if (speakers.length > 1) return reset("ambiguous");
       const speaker = speakers[0] || null;
       if (speaker) {
-        markerMissingSince = null;
         if (confirmed?.key === speaker.key) {
           confirmed = speaker;
           candidateKey = null;
@@ -780,12 +777,7 @@
       }
       candidateKey = null;
       candidateSince = 0;
-      if (confirmed) {
-        if (markerMissingSince === null) markerMissingSince = now;
-        if (now - markerMissingSince < releaseHoldMs) {
-          return result("confirmed-speaker", confirmed, confirmed.value);
-        }
-      }
+      if (confirmed) return result("confirmed-speaker", confirmed, confirmed.value);
       return reset("idle");
     }
     return { update, reset };

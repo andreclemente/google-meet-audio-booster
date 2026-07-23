@@ -14,11 +14,10 @@ export function collectCurrentUiSpeakers(participants, isSpeaking = participant 
   })
 }
 
-export function createWorkletSpeakerTracker({ confirmMs = 50, releaseHoldMs = 750 } = {}) {
+export function createWorkletSpeakerTracker({ confirmMs = 50 } = {}) {
   let confirmed = null
   let candidateKey = null
   let candidateSince = 0
-  let markerMissingSince = null
 
   function result(routingState, participant = null, multiplier = 1) {
     return {
@@ -35,7 +34,6 @@ export function createWorkletSpeakerTracker({ confirmMs = 50, releaseHoldMs = 75
     confirmed = null
     candidateKey = null
     candidateSince = 0
-    markerMissingSince = null
     return result(routingState)
   }
 
@@ -45,7 +43,6 @@ export function createWorkletSpeakerTracker({ confirmMs = 50, releaseHoldMs = 75
 
     const speaker = speakers[0] || null
     if (speaker) {
-      markerMissingSince = null
       if (confirmed?.key === speaker.key) {
         confirmed = speaker
         candidateKey = null
@@ -69,12 +66,11 @@ export function createWorkletSpeakerTracker({ confirmMs = 50, releaseHoldMs = 75
 
     candidateKey = null
     candidateSince = 0
-    if (confirmed) {
-      if (markerMissingSince === null) markerMissingSince = now
-      if (now - markerMissingSince < releaseHoldMs) {
-        return result('confirmed-speaker', confirmed, confirmed.value)
-      }
-    }
+    // Meet's visual speaking marker is intermittent and can disappear for
+    // arbitrary periods during one person's turn. Do not pulse a confirmed
+    // gain back to unity merely because the marker is absent. Concrete safety
+    // events above (another/overlapping speaker or hidden tab) still reset it.
+    if (confirmed) return result('confirmed-speaker', confirmed, confirmed.value)
     return reset('idle')
   }
 
@@ -294,9 +290,9 @@ export function createGoogleMeetController({ state, context, setStatus, renderSo
   function applyParticipantGain(participant) {
     if (syncPresentationState()) return
     if (globalThis.document?.hidden) return
-    // Pooled worklets expose no stable per-participant energy identity. A
-    // short same-speaker marker-dropout tolerance prevents audible pumping;
-    // different/overlapping speakers and hidden tabs still neutralize first.
+    // Pooled worklets expose no stable per-participant energy identity. Keep
+    // the confirmed speaker latched through missing UI markers; concrete
+    // speaker changes, overlap, presentation, and hidden tabs neutralize it.
     if (state.google.activeParticipantKey === participant.key) setOutputs(participant.value, true)
   }
   return { start, stop, route, applyParticipantGain, setOutputs, get pipelines() { return media.pipelines } }
